@@ -130,6 +130,9 @@ enum spdk_nvmf_trtype {
 	/** TCP */
 	SPDK_NVMF_TRTYPE_TCP		= 0x3,
 
+	/** pipe */
+	SPDK_NVMF_TRTYPE_PIPE		= 0x10,
+
 	/** Intra-host transport (loopback) */
 	SPDK_NVMF_TRTYPE_INTRA_HOST	= 0xfe,
 };

@@ -52,6 +52,7 @@ extern "C" {
 #define SPDK_NVME_TRANSPORT_NAME_PCIE	"PCIE"
 #define SPDK_NVME_TRANSPORT_NAME_RDMA	"RDMA"
 #define SPDK_NVME_TRANSPORT_NAME_TCP	"TCP"
+#define SPDK_NVME_TRANSPORT_NAME_PIPE	"PIPE"
 
 #define SPDK_NVMF_PRIORITY_MAX_LEN 4
 
@@ -312,6 +313,11 @@ enum spdk_nvme_transport_type {
 	 * TCP Transport
 	 */
 	SPDK_NVME_TRANSPORT_TCP = SPDK_NVMF_TRTYPE_TCP,
+
+	/**
+	 * PIPE Transport
+	 */
+	SPDK_NVME_TRANSPORT_PIPE = SPDK_NVMF_TRTYPE_PIPE,
 
 	/**
 	 * Custom Transport (Not spec defined)
