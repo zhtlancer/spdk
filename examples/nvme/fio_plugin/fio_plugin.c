@@ -42,6 +42,9 @@
 #include "spdk/dif.h"
 #include "spdk/util.h"
 
+#include "spdk/env.h"
+#include "spdk/event.h"
+
 #include "config-host.h"
 #include "fio.h"
 #include "optgroup.h"
@@ -85,6 +88,7 @@ struct spdk_fio_options {
 	int	apptag_mask;
 	char	*digest_enable;
 	int	enable_vmd;
+	char	*spdk_config;
 };
 
 struct spdk_fio_request {
@@ -387,6 +391,73 @@ static void parse_pract_flag(int pract)
 	}
 }
 
+pthread_t g_spdk_nvmf_thread_id;
+static struct spdk_app_opts g_spdk_nvmf_opts = {};
+
+static void
+spdk_nvmf_usage(void)
+{
+}
+
+static int
+spdk_nvmf_parse_arg(int ch, char *arg)
+{
+	return 0;
+}
+
+static void
+spdk_nvmf_tgt_started(void *arg1)
+{
+	if (getenv("MEMZONE_DUMP") != NULL) {
+		spdk_memzone_dump(stdout);
+		fflush(stdout);
+	}
+}
+
+static void *
+spdk_nvmf_thread(void *arg)
+{
+	int rc;
+
+	rc = spdk_app_start(&g_spdk_nvmf_opts, spdk_nvmf_tgt_started, NULL);
+	if (rc) {
+		SPDK_ERRLOG("(rc %d) failed to start spdk nvmf app\n", rc);
+		spdk_app_fini();
+		exit(rc);
+	}
+	spdk_app_fini();
+	return NULL;
+}
+
+static void spdk_nvmf_init(struct spdk_fio_options *fio_opts)
+{
+	int rc;
+	char *argv[4] = {"fio-nvmf", "-c", fio_opts->spdk_config, NULL};
+
+	SPDK_ERRLOG("spdk_config %s\n", fio_opts->spdk_config);
+	if (fio_opts->spdk_config == NULL) {
+		return;
+	}
+
+	spdk_app_opts_init(&g_spdk_nvmf_opts);
+
+	g_spdk_nvmf_opts.name = "nvmf";
+	if ((rc = spdk_app_parse_args(0, argv, &g_spdk_nvmf_opts, "", NULL,
+					spdk_nvmf_parse_arg, spdk_nvmf_usage)) !=
+			SPDK_APP_PARSE_ARGS_SUCCESS) {
+		exit(rc);
+	}
+
+	rc = pthread_create(&g_spdk_nvmf_thread_id, NULL,
+			&spdk_nvmf_thread, NULL);
+
+	if (rc != 0) {
+		SPDK_ERRLOG("(rc %d) Unable to spawn SPDK NVMF thread\n", rc);
+		exit(rc);
+	}
+	sleep(5);
+}
+
 /* Called once at initialization. This is responsible for gathering the size of
  * each "file", which in our case are in the form
  * 'key=value [key=value] ... ns=value'
@@ -437,6 +508,7 @@ static int spdk_fio_setup(struct thread_data *td)
 	assert(fio_thread->iocq != NULL);
 
 	if (!g_spdk_env_initialized) {
+#if 0
 		spdk_env_opts_init(&opts);
 		opts.name = "fio";
 		opts.mem_size = fio_options->mem_size;
@@ -457,6 +529,8 @@ static int spdk_fio_setup(struct thread_data *td)
 			pthread_mutex_unlock(&g_mutex);
 			return 1;
 		}
+#endif
+		spdk_nvmf_init(fio_options);
 		g_spdk_env_initialized = true;
 		spdk_unaffinitize_thread();
 
@@ -1227,6 +1301,16 @@ static struct fio_option options[] = {
 		.off1		= offsetof(struct spdk_fio_options, enable_vmd),
 		.def		= "0",
 		.help		= "Enable VMD enumeration (enable_vmd=1 or enable_vmd=0)",
+		.category	= FIO_OPT_C_ENGINE,
+		.group		= FIO_OPT_G_INVALID,
+	},
+	{
+		.name		= "spdk_config",
+		.lname		= "SPDK configuration file",
+		.type		= FIO_OPT_STR_STORE,
+		.off1		= offsetof(struct spdk_fio_options, spdk_config),
+		.def		= NULL,
+		.help		= "SPDK NVMF configuration file",
 		.category	= FIO_OPT_C_ENGINE,
 		.group		= FIO_OPT_G_INVALID,
 	},

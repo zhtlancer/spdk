@@ -894,6 +894,9 @@ spdk_nvme_trid_populate_transport(struct spdk_nvme_transport_id *trid,
 	case SPDK_NVME_TRANSPORT_TCP:
 		trstring = SPDK_NVME_TRANSPORT_NAME_TCP;
 		break;
+	case SPDK_NVME_TRANSPORT_PIPE:
+		trstring = SPDK_NVME_TRANSPORT_NAME_PIPE;
+		break;
 	case SPDK_NVME_TRANSPORT_CUSTOM:
 	default:
 		SPDK_ERRLOG("don't use this for custom transports\n");
@@ -944,6 +947,8 @@ spdk_nvme_transport_id_parse_trtype(enum spdk_nvme_transport_type *trtype, const
 		*trtype = SPDK_NVME_TRANSPORT_FC;
 	} else if (strcasecmp(str, "TCP") == 0) {
 		*trtype = SPDK_NVME_TRANSPORT_TCP;
+	} else if (strcasecmp(str, "PIPE") == 0) {
+		*trtype = SPDK_NVME_TRANSPORT_PIPE;
 	} else {
 		*trtype = SPDK_NVME_TRANSPORT_CUSTOM;
 	}
