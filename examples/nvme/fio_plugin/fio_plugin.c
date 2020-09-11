@@ -432,7 +432,7 @@ spdk_nvmf_thread(void *arg)
 static void spdk_nvmf_init(struct spdk_fio_options *fio_opts)
 {
 	int rc;
-	char *argv[4] = {"fio-nvmf", "-c", fio_opts->spdk_config, NULL};
+	char *argv[4] = {"nvmf_tgt", "-c", fio_opts->spdk_config, NULL};
 
 	SPDK_ERRLOG("spdk_config %s\n", fio_opts->spdk_config);
 	if (fio_opts->spdk_config == NULL) {
@@ -442,11 +442,12 @@ static void spdk_nvmf_init(struct spdk_fio_options *fio_opts)
 	spdk_app_opts_init(&g_spdk_nvmf_opts);
 
 	g_spdk_nvmf_opts.name = "nvmf";
-	if ((rc = spdk_app_parse_args(0, argv, &g_spdk_nvmf_opts, "", NULL,
+	if ((rc = spdk_app_parse_args(3, argv, &g_spdk_nvmf_opts, "", NULL,
 					spdk_nvmf_parse_arg, spdk_nvmf_usage)) !=
 			SPDK_APP_PARSE_ARGS_SUCCESS) {
 		exit(rc);
 	}
+	g_spdk_nvmf_opts.config_file = fio_opts->spdk_config;
 
 	rc = pthread_create(&g_spdk_nvmf_thread_id, NULL,
 			&spdk_nvmf_thread, NULL);
@@ -455,7 +456,7 @@ static void spdk_nvmf_init(struct spdk_fio_options *fio_opts)
 		SPDK_ERRLOG("(rc %d) Unable to spawn SPDK NVMF thread\n", rc);
 		exit(rc);
 	}
-	sleep(5);
+	sleep(10);
 }
 
 /* Called once at initialization. This is responsible for gathering the size of

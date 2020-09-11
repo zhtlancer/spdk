@@ -2,7 +2,6 @@
 #  BSD LICENSE
 #
 #  Copyright (c) Intel Corporation.
-#  Copyright (c) 2015-2016, Micron Technology, Inc.
 #  All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -32,22 +31,16 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
+SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
-include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
-FIO_PLUGIN := spdk_nvme
+SO_VER := 2
+SO_MINOR := 0
 
-C_SRCS = fio_plugin.c
+C_SRCS = pipe.c
+LIBNAME = global_pipe
+LOCAL_SYS_LIBS = -luuid
 
-# Unable to combine the FIO plugin and the VPP socket abstraction (license incompatibility)
-SPDK_LIB_LIST = $(filter-out sock_vpp,$(SOCK_MODULES_LIST)) $(ALL_MODULES_LIST)
-SPDK_LIB_LIST += thread util log sock jsonrpc json rpc
-SPDK_LIB_LIST += $(EVENT_BDEV_SUBSYSTEM) event_nvmf accel event_net
-SPDK_LIB_LIST += nvmf event trace bdev conf notify global_pipe net bdev_rpc app_rpc
+SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_global_pipe.map)
 
-ifeq ($(CONFIG_RDMA),y)
-SPDK_LIB_LIST += rdma
-endif
-
-include $(SPDK_ROOT_DIR)/mk/spdk.fio.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk
