@@ -35,39 +35,174 @@
 #include "spdk/log.h"
 #include "spdk/pipe.h"
 #include "spdk/util.h"
+#include "spdk/global_queue.h"
 
-struct spdk_pipe {
-	uint8_t	*buf;
-	uint32_t sz;
+#define SPDK_PIPE_BUF_SZ	(256)
 
-	uint32_t write;
-	uint32_t read;
-};
+struct global_queue *g_global_queue = NULL;
 
-#define SPDK_PIPE_BUF_SZ	(32*1024*1024)
+static bool g_global_quque_pending_connection = false;
+static pthread_mutex_t g_global_queue_lock;
 
-struct spdk_pipe *g_spdk_pipe = NULL;
-void *g_spdk_pipe_buf = NULL;
-
-struct spdk_pipe *
+static struct global_queue *
 spdk_pipe_get_global()
 {
-	if (g_spdk_pipe == NULL) {
-		g_spdk_pipe_buf = spdk_zmalloc(SPDK_PIPE_BUF_SZ,
-				0x1000, NULL,
-				SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
-		if (g_spdk_pipe_buf == NULL) {
-			SPDK_ERRLOG("Failed to create buffer for spdk_pipe\n");
+	struct global_queue *gq;
+
+	if (g_global_queue == NULL) {
+		int i;
+
+		g_global_queue = calloc(1, sizeof(struct global_queue));
+
+		STAILQ_INIT(&g_global_queue->h2c_queue_free);
+		STAILQ_INIT(&g_global_queue->h2c_queue);
+		STAILQ_INIT(&g_global_queue->c2h_queue_free);
+		STAILQ_INIT(&g_global_queue->c2h_queue);
+
+		g_global_queue->h2c_reqs = calloc(SPDK_PIPE_BUF_SZ,
+				sizeof(struct global_queue_req));
+		if (g_global_queue->h2c_reqs == NULL) {
 			return NULL;
 		}
-		g_spdk_pipe = spdk_pipe_create(g_spdk_pipe_buf, SPDK_PIPE_BUF_SZ);
-		if (g_spdk_pipe == NULL) {
-			SPDK_ERRLOG("Failed to create buffer for spdk_pipe\n");
-			spdk_free(g_spdk_pipe_buf);
+
+		for (i = 0; i < SPDK_PIPE_BUF_SZ; i++) {
+			STAILQ_INSERT_TAIL(&g_global_queue->h2c_queue_free,
+					&g_global_queue->h2c_reqs[i], link);
+		}
+
+		g_global_queue->c2h_reqs = calloc(SPDK_PIPE_BUF_SZ,
+				sizeof(struct global_queue_req));
+		if (g_global_queue->c2h_reqs == NULL) {
 			return NULL;
+		}
+		for (i = 0; i < SPDK_PIPE_BUF_SZ; i++) {
+			STAILQ_INSERT_TAIL(&g_global_queue->c2h_queue_free,
+					&g_global_queue->c2h_reqs[i], link);
 		}
 	}
 
-	return g_spdk_pipe;
+	return g_global_queue;
 }
 
+struct global_queue_req *
+spdk_pipe_get_free_h2c_req(struct global_queue *queue)
+{
+	struct global_queue_req *req;
+
+	while (STAILQ_EMPTY(&queue->h2c_queue_free));
+
+	req = STAILQ_FIRST(&queue->h2c_queue_free);
+	STAILQ_REMOVE(&queue->h2c_queue_free, req, global_queue_req, link);
+
+	return req;
+}
+
+struct global_queue_req *
+spdk_pipe_get_recv_h2c_req(struct global_queue *queue)
+{
+	struct global_queue_req *req;
+
+	while (STAILQ_EMPTY(&queue->h2c_queue));
+
+	req = STAILQ_FIRST(&queue->h2c_queue);
+	STAILQ_REMOVE(&queue->h2c_queue, req, global_queue_req, link);
+
+	return req;
+}
+
+int spdk_pipe_submit_h2c_req(struct global_queue *queue, struct global_queue_req *req)
+{
+	STAILQ_INSERT_TAIL(&queue->h2c_queue, req, link);
+	return 0;
+}
+
+struct global_queue_req *
+spdk_pipe_get_free_c2h_req(struct global_queue *queue)
+{
+	struct global_queue_req *req;
+
+	while (STAILQ_EMPTY(&queue->c2h_queue_free));
+
+	req = STAILQ_FIRST(&queue->c2h_queue_free);
+	STAILQ_REMOVE(&queue->c2h_queue_free, req, global_queue_req, link);
+
+	return req;
+}
+
+struct global_queue_req *
+spdk_pipe_get_recv_c2h_req(struct global_queue *queue)
+{
+	struct global_queue_req *req;
+
+	while (STAILQ_EMPTY(&queue->c2h_queue));
+
+	req = STAILQ_FIRST(&queue->c2h_queue);
+	STAILQ_REMOVE(&queue->c2h_queue, req, global_queue_req, link);
+
+	return req;
+}
+
+int spdk_pipe_submit_c2h_req(struct global_queue *queue, struct global_queue_req *req)
+{
+	STAILQ_INSERT_TAIL(&queue->c2h_queue, req, link);
+	return 0;
+}
+
+
+int spdk_pipe_listen()
+{
+	pthread_mutex_init(&g_global_queue_lock, NULL);
+
+	return 0;
+}
+
+struct global_queue *spdk_pipe_connect()
+{
+	struct global_queue *gp;
+	while (spdk_pipe_pending_connection())
+		// spin on pending connection
+		SPDK_NOTICELOG("| %s (%s:%d) wait for pending connection\n",
+				__func__, __FILE__, __LINE__);
+	pthread_mutex_lock(&g_global_queue_lock);
+
+	gp = spdk_pipe_get_global();
+	if (gp == NULL) {
+		SPDK_ERRLOG("| %s (%s:%d) failed to get global queue\n",
+				__func__, __FILE__, __LINE__);
+		assert(0);
+	}
+
+	g_global_quque_pending_connection = true;
+	pthread_mutex_unlock(&g_global_queue_lock);
+	return gp;
+}
+
+struct global_queue *spdk_pipe_accept()
+{
+	struct global_queue *gp;
+	if (!spdk_pipe_pending_connection()) {
+		return NULL;
+	}
+
+	pthread_mutex_lock(&g_global_queue_lock);
+
+	gp = spdk_pipe_get_global();
+
+	if (gp == NULL) {
+		SPDK_ERRLOG("| %s (%s:%d) failed to get global queue\n",
+				__func__, __FILE__, __LINE__);
+		assert(0);
+	}
+
+	// FIXME keep track of allocated global pipes?
+	g_global_queue = NULL;
+
+	g_global_quque_pending_connection = false;
+	pthread_mutex_unlock(&g_global_queue_lock);
+
+	return gp;
+}
+bool spdk_pipe_pending_connection()
+{
+	return g_global_quque_pending_connection;
+}

@@ -129,6 +129,7 @@ struct nvme_tcp_pdu {
 	struct spdk_dif_ctx				*dif_ctx;
 
 	void						*req; /* data tied to a tcp request */
+	void						*nvmf_req; /* data tied to a nvmf request */
 	void						*qpair;
 };
 SPDK_STATIC_ASSERT(offsetof(struct nvme_tcp_pdu,
