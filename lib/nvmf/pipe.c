@@ -652,7 +652,7 @@ nvmf_pipe_discover(struct spdk_nvmf_transport *transport,
 		  struct spdk_nvmf_discovery_log_page_entry *entry)
 {
 	// XXX anything needed here?
-	SPDK_ERRLOG("%s (%s:%d) called\n", __func__, __FILE__, __LINE__);
+	SPDK_NOTICELOG("%s (%s:%d) called\n", __func__, __FILE__, __LINE__);
 
 	// XXX: anything needed for discovery?
 	entry->trtype = SPDK_NVMF_TRTYPE_PIPE;
@@ -661,6 +661,9 @@ nvmf_pipe_discover(struct spdk_nvmf_transport *transport,
 
 	spdk_strcpy_pad(entry->trsvcid, trid->trsvcid, sizeof(entry->trsvcid), ' ');
 	spdk_strcpy_pad(entry->traddr, trid->traddr, sizeof(entry->traddr), ' ');
+
+	SPDK_NOTICELOG("entry->trsvcid %s entry->traddr %s\n",
+			entry->trsvcid, entry->traddr);
 
 	entry->tsas.tcp.sectype = SPDK_NVME_TCP_SECURITY_NONE;
 }
@@ -726,6 +729,8 @@ nvmf_pipe_qpair_set_recv_state(struct spdk_nvmf_pipe_qpair *tqpair,
 			    tqpair, state);
 		return;
 	}
+	SPDK_NOTICELOG("%s setting tqpair %p state from %d to %d\n",
+			__func__, tqpair, tqpair->recv_state, state);
 
 	if (tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_AWAIT_REQ) {
 		/* When leaving the await req state, move the qpair to the main list */
@@ -771,12 +776,14 @@ nvmf_pipe_gq_process(struct spdk_nvmf_pipe_qpair *tqpair)
 	if (!spdk_pipe_h2c_queue_empty(gp)) {
 		struct global_queue_req *global_req;
 		global_req = spdk_pipe_get_recv_h2c_req(gp);
+		global_req->state = GLOBAL_REQ_STATE_NEW;
 		if (global_req->pdu)
 			tqpair->current_pdu = global_req->pdu;
 		else
 			tqpair->current_pdu = global_req->nvme_req->send_pdu;
 		SPDK_NOTICELOG("global_req aquired at %p nvme_req %p pdu %p\n",
 				global_req, global_req->nvme_req, tqpair->current_pdu);
+		// run the global_req
 		nvmf_pipe_nvme_req_process(tqpair, global_req);
 	}
 	return rc;
@@ -974,6 +981,13 @@ nvmf_pipe_qpair_write_pdu(struct spdk_nvmf_pipe_qpair *tqpair,
 		assert(0);
 	}
 
+	{
+		int i;
+		uint64_t *ptr = pdu->data_iov[0].iov_base;
+
+		for (i = 0; i < pdu->data_iov[0].iov_len/8; i++)
+			SPDK_NOTICELOG("\t%p %lx\n", &ptr[i], ptr[i]);
+	}
 	// FIXME: callback not implemented yet
 	pdu->cb_fn = cb_fn;
 	pdu->cb_arg = cb_arg;
@@ -1015,11 +1029,10 @@ nvmf_pipe_qpair_write_pdu(struct spdk_nvmf_pipe_qpair *tqpair,
 static void
 nvmf_pipe_r2t_complete(void *cb_arg)
 {
-	// FIXME: callback not implemented yet
 	struct spdk_nvmf_pipe_req *pipe_req = cb_arg;
 	struct spdk_nvmf_pipe_transport *ttransport;
 
-	SPDK_ERRLOG("|%s (%s:%d) unhandled\n", __func__, __FILE__, __LINE__);
+	SPDK_NOTICELOG("| %s (%s:%d) completion called\n", __func__, __FILE__, __LINE__);
 	nvmf_pipe_req_pdu_fini(pipe_req);
 
 	ttransport = SPDK_CONTAINEROF(pipe_req->req.qpair->transport,
@@ -1027,8 +1040,11 @@ nvmf_pipe_r2t_complete(void *cb_arg)
 
 	nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER);
 
-	nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_READY_TO_EXECUTE);
-	nvmf_pipe_req_process(ttransport, pipe_req);
+	if (pipe_req->h2c_offset == pipe_req->req.length) {
+		nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_READY_TO_EXECUTE);
+		// XXX: ignore process call here?
+		nvmf_pipe_req_process(ttransport, pipe_req);
+	}
 }
 
 static void
@@ -1038,7 +1054,6 @@ nvmf_pipe_send_r2t_pdu(struct spdk_nvmf_pipe_qpair *tqpair,
 	struct nvme_tcp_pdu *rsp_pdu;
 	struct spdk_nvme_tcp_r2t_hdr *r2t;
 
-	SPDK_ERRLOG("|%s (%s:%d) unhandled\n", __func__, __FILE__, __LINE__);
 	rsp_pdu = nvmf_pipe_req_pdu_init(pipe_req);
 	assert(rsp_pdu != NULL);
 
@@ -1058,9 +1073,8 @@ nvmf_pipe_send_r2t_pdu(struct spdk_nvmf_pipe_qpair *tqpair,
 
 	nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_AWAITING_R2T_ACK);
 
-	SPDK_DEBUGLOG(SPDK_LOG_NVMF_TCP,
-		      "tcp_req(%p) on tqpair(%p), r2t_info: cccid=%u, ttag=%u, r2to=%u, r2tl=%u\n",
-		      tcp_req, tqpair, r2t->cccid, r2t->ttag, r2t->r2to, r2t->r2tl);
+	SPDK_NOTICELOG("tcp_req(%p) on tqpair(%p), r2t_info: cccid=%u, ttag=%u, r2to=%u, r2tl=%u\n",
+		      pipe_req, tqpair, r2t->cccid, r2t->ttag, r2t->r2to, r2t->r2tl);
 	nvmf_pipe_qpair_write_pdu(tqpair, rsp_pdu, nvmf_pipe_r2t_complete, pipe_req);
 }
 
@@ -1211,6 +1225,100 @@ nvmf_pipe_send_c2h_data(struct spdk_nvmf_pipe_qpair *tqpair,
 	nvmf_pipe_qpair_write_pdu(tqpair, rsp_pdu, nvmf_pipe_pdu_c2h_data_complete, pipe_req);
 }
 
+static int
+nvmf_pipe_find_req_in_state(struct spdk_nvmf_pipe_qpair *tqpair,
+			   enum spdk_nvmf_pipe_req_state state,
+			   uint16_t cid, uint16_t tag,
+			   struct spdk_nvmf_pipe_req **req)
+{
+	struct spdk_nvmf_pipe_req *pipe_req = NULL;
+
+	TAILQ_FOREACH(pipe_req, &tqpair->state_queue[state], state_link) {
+		if (pipe_req->req.cmd->nvme_cmd.cid != cid) {
+			continue;
+		}
+
+		if (pipe_req->ttag == tag) {
+			*req = pipe_req;
+			return 0;
+		}
+
+		*req = NULL;
+		return -1;
+	}
+
+	/* Didn't find it, but not an error */
+	*req = NULL;
+	return 0;
+}
+
+static void
+nvmf_pipe_h2c_data_hdr_handle(struct spdk_nvmf_pipe_transport *ttransport,
+			     struct spdk_nvmf_pipe_qpair *tqpair,
+			     struct nvme_tcp_pdu *pdu)
+{
+	struct spdk_nvmf_pipe_req *pipe_req;
+	uint32_t error_offset = 0;
+	enum spdk_nvme_tcp_term_req_fes fes = 0;
+	struct spdk_nvme_tcp_h2c_data_hdr *h2c_data;
+	int rc;
+
+	h2c_data = &pdu->hdr.h2c_data;
+
+	SPDK_DEBUGLOG(SPDK_LOG_NVMF_PIPE, "tqpair=%p, r2t_info: datao=%u, datal=%u, cccid=%u, ttag=%u\n",
+		      tqpair, h2c_data->datao, h2c_data->datal, h2c_data->cccid, h2c_data->ttag);
+
+	rc = nvmf_pipe_find_req_in_state(tqpair, PIPE_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER,
+					h2c_data->cccid, h2c_data->ttag, &pipe_req);
+	if (rc == 0 && pipe_req == NULL) {
+		rc = nvmf_pipe_find_req_in_state(tqpair, PIPE_REQUEST_STATE_AWAITING_R2T_ACK, h2c_data->cccid,
+						h2c_data->ttag, &pipe_req);
+	}
+
+	if (!pipe_req) {
+		SPDK_ERRLOG("tcp_req is not found for tqpair=%p\n", tqpair);
+		fes = SPDK_NVME_TCP_TERM_REQ_FES_INVALID_DATA_UNSUPPORTED_PARAMETER;
+		if (rc == 0) {
+			error_offset = offsetof(struct spdk_nvme_tcp_h2c_data_hdr, cccid);
+		} else {
+			error_offset = offsetof(struct spdk_nvme_tcp_h2c_data_hdr, ttag);
+		}
+		goto err;
+	}
+
+	if (pipe_req->h2c_offset != h2c_data->datao) {
+		SPDK_DEBUGLOG(SPDK_LOG_NVMF_PIPE,
+			      "tcp_req(%p), tqpair=%p, expected data offset %u, but data offset is %u\n",
+			      pipe_req, tqpair, pipe_req->h2c_offset, h2c_data->datao);
+		fes = SPDK_NVME_TCP_TERM_REQ_FES_DATA_TRANSFER_OUT_OF_RANGE;
+		goto err;
+	}
+
+	if ((h2c_data->datao + h2c_data->datal) > pipe_req->req.length) {
+		SPDK_DEBUGLOG(SPDK_LOG_NVMF_PIPE,
+			      "tcp_req(%p), tqpair=%p,  (datao=%u + datal=%u) execeeds requested length=%u\n",
+			      pipe_req, tqpair, h2c_data->datao, h2c_data->datal, pipe_req->req.length);
+		fes = SPDK_NVME_TCP_TERM_REQ_FES_DATA_TRANSFER_OUT_OF_RANGE;
+		goto err;
+	}
+
+	pdu->nvmf_req = pipe_req;
+
+	if (spdk_unlikely(pipe_req->req.dif.dif_insert_or_strip)) {
+		pdu->dif_ctx = &pipe_req->req.dif.dif_ctx;
+	}
+
+	// XXX: don't call nvme_tcp_pdu_set_data_buf() here, since pdu is shared
+	//nvme_tcp_pdu_set_data_buf(pdu, tcp_req->req.iov, tcp_req->req.iovcnt,
+	//			  h2c_data->datao, h2c_data->datal);
+	nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
+	return;
+
+err:
+	SPDK_ERRLOG("Unhandled error\n");
+	//nvmf_tcp_send_c2h_term_req(tqpair, pdu, fes, error_offset);
+}
+
 static void
 nvmf_pipe_pdu_cmd_complete(void *cb_arg)
 {
@@ -1224,6 +1332,8 @@ nvmf_pipe_send_capsule_resp_pdu(struct spdk_nvmf_pipe_req *pipe_req,
 {
 	struct nvme_tcp_pdu *rsp_pdu;
 	struct spdk_nvme_tcp_rsp *capsule_resp;
+
+	SPDK_NOTICELOG("| %s (%s:%d) called\n", __func__, __FILE__, __LINE__);
 
 	SPDK_DEBUGLOG(SPDK_LOG_NVMF_TCP, "enter, tqpair=%p\n", tqpair);
 
@@ -1275,6 +1385,22 @@ request_transfer_out(struct spdk_nvmf_request *req)
 	return 0;
 }
 
+static void
+dump_nvmf_req(struct spdk_nvmf_request *req)
+{
+	struct spdk_nvmf_capsule_cmd *cap_hdr = &req->cmd->nvmf_cmd;
+
+	SPDK_NOTICELOG("Dumping spdk_nvmf_request %p:\n"
+			"\topcode %x\n"
+			"\tcid %x\n"
+			"\tfctype %x\n"
+			, req
+			, cap_hdr->opcode
+			, cap_hdr->cid
+			, cap_hdr->fctype
+			);
+}
+
 static bool
 nvmf_pipe_req_process(struct spdk_nvmf_pipe_transport *ttransport,
 		     struct spdk_nvmf_pipe_req *pipe_req)
@@ -1319,8 +1445,12 @@ nvmf_pipe_req_process(struct spdk_nvmf_pipe_transport *ttransport,
 				nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_READY_TO_EXECUTE);
 				break;
 			}
-			// TODO: copy data
+
 			nvmf_pipe_set_incapsule_data(tqpair, pipe_req);
+
+			if (!pipe_req->has_incapsule_data) {
+				nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
+			}
 
 			nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_NEED_BUFFER);
 			STAILQ_INSERT_TAIL(&group->pending_buf_queue, &pipe_req->req, buf_link);
@@ -1356,6 +1486,8 @@ nvmf_pipe_req_process(struct spdk_nvmf_pipe_transport *ttransport,
 					pdu = tqpair->current_pdu;
 
 					// XXX: don't call nvme_tcp_pdu_set_data_buf here, since pdu is shared
+					//nvme_tcp_pdu_set_data_buf(pdu, tcp_req->req.iov, tcp_req->req.iovcnt,
+					//			  0, tcp_req->req.length);
 					nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
 				}
 				break;
@@ -1365,12 +1497,16 @@ nvmf_pipe_req_process(struct spdk_nvmf_pipe_transport *ttransport,
 			break;
 		case PIPE_REQUEST_STATE_AWAITING_R2T_ACK:
 			break;
+		case PIPE_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER:
+			break;
 		case PIPE_REQUEST_STATE_READY_TO_EXECUTE:
 
 			if (spdk_unlikely(pipe_req->req.dif.dif_insert_or_strip)) {
 				assert(pipe_req->req.dif.elba_length >= pipe_req->req.length);
 				pipe_req->req.length = pipe_req->req.dif.elba_length;
 			}
+
+			dump_nvmf_req(&pipe_req->req);
 
 			nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_EXECUTING);
 			spdk_nvmf_request_exec(&pipe_req->req);
@@ -1391,7 +1527,7 @@ nvmf_pipe_req_process(struct spdk_nvmf_pipe_transport *ttransport,
 			assert(rc == 0);
 			break;
 		case PIPE_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST:
-			SPDK_ERRLOG("|%s (%s:%d) unhandled\n", __func__, __FILE__, __LINE__);
+			// nothing need here
 			break;
 		case PIPE_REQUEST_STATE_COMPLETED:
 			if (pipe_req->req.data_from_pool) {
@@ -1499,35 +1635,106 @@ dump_pdu_ch(struct nvme_tcp_pdu *pdu)
 }
 
 static void
+nvmf_pipe_h2c_data_payload_handle(struct spdk_nvmf_pipe_transport *ttransport,
+				 struct spdk_nvmf_pipe_qpair *tqpair,
+				 struct nvme_tcp_pdu *pdu)
+{
+	struct spdk_nvmf_pipe_req *pipe_req;
+
+	pipe_req = pdu->nvmf_req;
+	assert(pipe_req != NULL);
+
+	SPDK_DEBUGLOG(SPDK_LOG_NVMF_PIPE, "enter\n");
+
+	pipe_req->h2c_offset += pdu->data_len;
+
+	nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
+
+	/* Wait for all of the data to arrive AND for the initial R2T PDU send to be
+	 * acknowledged before moving on. */
+	if (pipe_req->h2c_offset == pipe_req->req.length &&
+	    pipe_req->state == PIPE_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER) {
+		nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_READY_TO_EXECUTE);
+		nvmf_pipe_req_process(ttransport, pipe_req);
+	}
+}
+
+static void
 nvmf_pipe_pdu_ch_handle(struct spdk_nvmf_pipe_qpair *tqpair)
 {
 	struct nvme_tcp_pdu *pdu;
 
 	pdu = tqpair->current_pdu;
 
-	dump_pdu_ch(pdu);
+	//dump_pdu_ch(pdu);
 
-	if (pdu->hdr.common.pdu_type == SPDK_NVME_TCP_PDU_TYPE_IC_REQ)
-		goto skip_switch;
+	if (pdu->hdr.common.pdu_type == SPDK_NVME_TCP_PDU_TYPE_IC_REQ) {
+		nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PSH);
+		return;
+	}
 
 	switch (pdu->hdr.common.pdu_type) {
 	case SPDK_NVME_TCP_PDU_TYPE_CAPSULE_CMD:
-		nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PSH);
+		break;
+	case SPDK_NVME_TCP_PDU_TYPE_H2C_DATA:
 		break;
 	default:
-		SPDK_ERRLOG("Unsupported PDU type %x\n", pdu->hdr.common.pdu_type);
+		SPDK_ERRLOG("Unhandled PDU type %x\n", pdu->hdr.common.pdu_type);
 		break;
 	}
 
-skip_switch:
 	nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PSH);
+
 	return;
+}
+
+static void
+nvmf_pipe_pdu_payload_handle(struct spdk_nvmf_pipe_qpair *tqpair,
+			    struct spdk_nvmf_pipe_transport *ttransport)
+{
+	int rc = 0;
+	struct nvme_tcp_pdu *pdu;
+	uint32_t crc32c, error_offset = 0;
+	enum spdk_nvme_tcp_term_req_fes fes;
+
+	assert(tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
+	pdu = tqpair->current_pdu;
+
+	SPDK_DEBUGLOG(SPDK_LOG_NVMF_PIPE, "enter\n");
+	/* check data digest if need */
+	if (pdu->ddgst_enable) {
+		SPDK_ERRLOG("Unhandled setup\n");
+#if 0
+		crc32c = nvme_tcp_pdu_calc_data_digest(pdu);
+		rc = MATCH_DIGEST_WORD(pdu->data_digest, crc32c);
+		if (rc == 0) {
+			SPDK_ERRLOG("Data digest error on tqpair=(%p) with pdu=%p\n", tqpair, pdu);
+			fes = SPDK_NVME_TCP_TERM_REQ_FES_HDGST_ERROR;
+			nvmf_tcp_send_c2h_term_req(tqpair, pdu, fes, error_offset);
+			return;
+
+		}
+#endif
+	}
+
+	switch (pdu->hdr.common.pdu_type) {
+	case SPDK_NVME_TCP_PDU_TYPE_H2C_DATA:
+		nvmf_pipe_h2c_data_payload_handle(ttransport, tqpair, pdu);
+		break;
+	default:
+		/* The code should not go to here */
+		SPDK_ERRLOG("Unhandled payload code The code should not go to here %d\n",
+				pdu->hdr.common.pdu_type);
+		break;
+	}
 }
 
 static void
 nvmf_pipe_send_icresp_complete(void *cb_arg)
 {
 	struct spdk_nvmf_pipe_qpair *tqpair = cb_arg;
+
+	SPDK_ERRLOG("| %s (%s:%d) completion called\n", __func__, __FILE__, __LINE__);
 
 	tqpair->state = NVME_TCP_QPAIR_STATE_RUNNING;
 }
@@ -1553,7 +1760,7 @@ nvmf_pipe_icreq_handle(struct spdk_nvmf_pipe_transport *ttransport,
 	}
 
 	/* MAXR2T is 0's based */
-	SPDK_DEBUGLOG(SPDK_LOG_NVMF_TCP, "maxr2t =%u\n", (ic_req->maxr2t + 1u));
+	SPDK_DEBUGLOG(SPDK_LOG_NVMF_PIPE, "maxr2t =%u\n", (ic_req->maxr2t + 1u));
 
 	tqpair->host_hdgst_enable = ic_req->dgst.bits.hdgst_enable ? true : false;
 	if (!tqpair->host_hdgst_enable) {
@@ -1593,6 +1800,7 @@ nvmf_pipe_icreq_handle(struct spdk_nvmf_pipe_transport *ttransport,
 	SPDK_DEBUGLOG(SPDK_LOG_NVMF_TCP, "host_ddgst_enable: %u\n", tqpair->host_ddgst_enable);
 
 	tqpair->state = NVME_TCP_QPAIR_STATE_INITIALIZING;
+	_pdu_issue_callback(pdu);
 	nvmf_pipe_qpair_write_pdu(tqpair, rsp_pdu, nvmf_pipe_send_icresp_complete, tqpair);
 	nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
 	return;
@@ -1618,8 +1826,11 @@ nvmf_pipe_pdu_psh_handle(struct spdk_nvmf_pipe_qpair *tqpair,
 	case SPDK_NVME_TCP_PDU_TYPE_CAPSULE_CMD:
 		nvmf_pipe_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_REQ);
 		break;
+	case SPDK_NVME_TCP_PDU_TYPE_H2C_DATA:
+		nvmf_pipe_h2c_data_hdr_handle(ttransport, tqpair, pdu);
+		break;
 	default:
-		SPDK_ERRLOG("Unsupported PDU type %x\n", pdu->hdr.common.pdu_type);
+		SPDK_ERRLOG("Unhandled PDU type %x\n", pdu->hdr.common.pdu_type);
 		assert(0);
 		break;
 	}
@@ -1641,8 +1852,48 @@ nvmf_pipe_capsule_cmd_hdr_handle(struct spdk_nvmf_pipe_transport *ttransport,
 	}
 
 	pdu->nvmf_req = pipe_req;
+
+	SPDK_ERRLOG("%s (%s:%d) nvmf_req %p req %p\n",
+			__func__, __FILE__, __LINE__,
+			pdu->nvmf_req, pdu->req);
 	assert(pipe_req->state == TCP_REQUEST_STATE_NEW);
 	nvmf_pipe_req_process(ttransport, pipe_req);
+}
+
+static int
+nvmf_pipe_copy_payload_data(struct nvme_tcp_pdu *pdu)
+{
+	struct spdk_nvmf_pipe_req *pipe_req;
+	struct iovec *iov;
+	struct spdk_nvme_tcp_h2c_data_hdr *h2c_data;
+	int iovcnt;
+	int rc = 0;
+
+	pipe_req = pdu->nvmf_req;
+
+	if (pipe_req == NULL) {
+		SPDK_ERRLOG("No pipe_req linked to pdu %p\n", pdu);
+		assert(0);
+		return -1;
+	}
+
+	h2c_data = &pdu->hdr.h2c_data;
+	iov = pipe_req->req.iov;
+	iovcnt = pipe_req->req.iovcnt;
+
+	if (iovcnt == 1) {
+		if (iov[0].iov_len != pdu->data_iov[0].iov_len) {
+			SPDK_ERRLOG("Unhandled case, iov_len mismatch %u vs. %u\n",
+					iov[0].iov_len, pdu->data_iov[0].iov_len);
+			assert(0);
+		}
+		memcpy(iov[0].iov_base, pdu->data_iov[0].iov_base, pdu->data_iov[0].iov_len);
+	} else {
+		SPDK_ERRLOG("Unhandled iovcnt %d\n", iovcnt);
+		assert(0);
+	}
+
+	return rc;
 }
 
 static int
@@ -1656,19 +1907,32 @@ nvmf_pipe_nvme_req_process(struct spdk_nvmf_pipe_qpair *tqpair,
 			struct spdk_nvmf_pipe_transport, transport);
 
 	//dump_global_req(global_req);
+	dump_global_req(global_req);
+	tqpair->current_pdu = global_req->pdu;
+	pdu = tqpair->current_pdu;
+	dump_pdu_ch(pdu);
 
 	do {
 		prev_state = tqpair->recv_state;
 		SPDK_NOTICELOG("tqpair(%p) recv pdu %p global_req %p entering state %d\n",
 				tqpair, tqpair->current_pdu, global_req, prev_state);
-		dump_global_req(global_req);
 
 		switch (tqpair->recv_state) {
 		case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY:
-			tqpair->current_pdu = global_req->pdu;
-			pdu = tqpair->current_pdu;
+			if (tqpair->current_pdu == NULL) {
+				SPDK_NOTICELOG("tqpair(%p) done processing global_req %p\n",
+						tqpair, global_req);
+				global_req->state = GLOBAL_REQ_STATE_DONE;
+				return rc;
+			}
+
 			// fall through
 		case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_CH:
+			if (spdk_unlikely(tqpair->state == NVME_TCP_QPAIR_STATE_INITIALIZING)) {
+				SPDK_NOTICELOG("tqpair(%p) stilling initializing global_req %p\n",
+						tqpair, global_req);
+				return rc;
+			}
 
 			nvmf_pipe_pdu_ch_handle(tqpair);
 			break;
@@ -1679,6 +1943,15 @@ nvmf_pipe_nvme_req_process(struct spdk_nvmf_pipe_qpair *tqpair,
 		/* Wait for the req slot */
 		case NVME_TCP_PDU_RECV_STATE_AWAIT_REQ:
 			nvmf_pipe_capsule_cmd_hdr_handle(ttransport, tqpair, pdu);
+			break;
+		case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD:
+			if (spdk_unlikely(pdu->dif_ctx != NULL)) {
+				SPDK_ERRLOG("Unhandled setup\n");
+			}
+			// XXX: copy pdu iovs into nvmf_req
+			nvmf_pipe_copy_payload_data(pdu);
+			_pdu_issue_callback(pdu);
+			nvmf_pipe_pdu_payload_handle(tqpair, ttransport);
 			break;
 		default:
 			assert(0);
@@ -1758,13 +2031,13 @@ nvmf_pipe_req_complete(struct spdk_nvmf_request *req)
 	struct spdk_nvmf_pipe_transport *ttransport;
 	struct spdk_nvmf_pipe_req *pipe_req;
 
-	// XXX anything needed here?
 	SPDK_ERRLOG("%s (%s:%d) called\n", __func__, __FILE__, __LINE__);
 
 	ttransport = SPDK_CONTAINEROF(req->qpair->transport, struct spdk_nvmf_pipe_transport, transport);
 	pipe_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_pipe_req, req);
 
 	nvmf_pipe_req_set_state(pipe_req, PIPE_REQUEST_STATE_EXECUTED);
+	// XXX ignore the process call here?
 	nvmf_pipe_req_process(ttransport, pipe_req);
 
 	return 0;

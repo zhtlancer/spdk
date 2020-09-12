@@ -76,37 +76,37 @@ enum spdk_nvmf_pipe_req_state {
 	/* The request is not currently in use */
 	PIPE_REQUEST_STATE_FREE = 0,
 
-	/* Initial state when request first received */
+	/* 1 Initial state when request first received */
 	PIPE_REQUEST_STATE_NEW,
 
-	/* The request is queued until a data buffer is available. */
+	/* 2 The request is queued until a data buffer is available. */
 	PIPE_REQUEST_STATE_NEED_BUFFER,
 
-	/* The request is currently transferring data from the host to the controller. */
+	/* 3 The request is currently transferring data from the host to the controller. */
 	PIPE_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER,
 
-	/* The request is waiting for the R2T send acknowledgement. */
+	/* 4 The request is waiting for the R2T send acknowledgement. */
 	PIPE_REQUEST_STATE_AWAITING_R2T_ACK,
 
-	/* The request is ready to execute at the block device */
+	/* 5 The request is ready to execute at the block device */
 	PIPE_REQUEST_STATE_READY_TO_EXECUTE,
 
-	/* The request is currently executing at the block device */
+	/* 6 The request is currently executing at the block device */
 	PIPE_REQUEST_STATE_EXECUTING,
 
-	/* The request finished executing at the block device */
+	/* 7 The request finished executing at the block device */
 	PIPE_REQUEST_STATE_EXECUTED,
 
-	/* The request is ready to send a completion */
+	/* 8 The request is ready to send a completion */
 	PIPE_REQUEST_STATE_READY_TO_COMPLETE,
 
-	/* The request is currently transferring final pdus from the controller to the host. */
+	/* 9 The request is currently transferring final pdus from the controller to the host. */
 	PIPE_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST,
 
-	/* The request completed and can be marked free. */
+	/* 10 The request completed and can be marked free. */
 	PIPE_REQUEST_STATE_COMPLETED,
 
-	/* Terminator */
+	/* 11 Terminator */
 	PIPE_REQUEST_NUM_STATES,
 };
 
@@ -146,10 +146,19 @@ struct spdk_nvmf_pipe_req  {
 	TAILQ_ENTRY(spdk_nvmf_pipe_req)		state_link;
 };
 
+enum global_req_state {
+	GLOBAL_REQ_STATE_FREE	= 0x0,
+	GLOBAL_REQ_STATE_NEW	= 0x1,
+
+	GLOBAL_REQ_STATE_DONE	= 0xF,
+	GLOBAL_REQ_STATE_FAIL	= 0x10,
+};
+
 struct global_queue_req {
 	struct nvme_pipe_req			*nvme_req;
 	struct spdk_nvmf_pipe_req		*nvmf_req;
 	struct nvme_tcp_pdu			*pdu;
+	enum global_req_state			state;
 	STAILQ_ENTRY(global_queue_req)		link;
 };
 
@@ -157,10 +166,12 @@ struct global_queue {
 	struct global_queue_req		*h2c_reqs;
 	STAILQ_HEAD(, global_queue_req)	h2c_queue;
 	STAILQ_HEAD(, global_queue_req)	h2c_queue_free;
+	STAILQ_HEAD(, global_queue_req)	h2c_queue_running;
 
 	struct global_queue_req		*c2h_reqs;
 	STAILQ_HEAD(, global_queue_req)	c2h_queue;
 	STAILQ_HEAD(, global_queue_req)	c2h_queue_free;
+	STAILQ_HEAD(, global_queue_req)	c2h_queue_running;
 };
 
 //struct global_queue *spdk_pipe_get_global(void);

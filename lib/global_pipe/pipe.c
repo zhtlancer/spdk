@@ -56,8 +56,10 @@ spdk_pipe_get_global()
 
 		STAILQ_INIT(&g_global_queue->h2c_queue_free);
 		STAILQ_INIT(&g_global_queue->h2c_queue);
+		STAILQ_INIT(&g_global_queue->h2c_queue_running);
 		STAILQ_INIT(&g_global_queue->c2h_queue_free);
 		STAILQ_INIT(&g_global_queue->c2h_queue);
+		STAILQ_INIT(&g_global_queue->c2h_queue_running);
 
 		g_global_queue->h2c_reqs = calloc(SPDK_PIPE_BUF_SZ,
 				sizeof(struct global_queue_req));
@@ -106,12 +108,14 @@ spdk_pipe_get_recv_h2c_req(struct global_queue *queue)
 
 	req = STAILQ_FIRST(&queue->h2c_queue);
 	STAILQ_REMOVE(&queue->h2c_queue, req, global_queue_req, link);
+	STAILQ_INSERT_TAIL(&queue->h2c_queue_running, req, link);
 
 	return req;
 }
 
 int spdk_pipe_submit_h2c_req(struct global_queue *queue, struct global_queue_req *req)
 {
+	SPDK_NOTICELOG("Sending out h2c global_req %p\n", req);
 	STAILQ_INSERT_TAIL(&queue->h2c_queue, req, link);
 	return 0;
 }
@@ -138,12 +142,14 @@ spdk_pipe_get_recv_c2h_req(struct global_queue *queue)
 
 	req = STAILQ_FIRST(&queue->c2h_queue);
 	STAILQ_REMOVE(&queue->c2h_queue, req, global_queue_req, link);
+	STAILQ_INSERT_TAIL(&queue->c2h_queue_running, req, link);
 
 	return req;
 }
 
 int spdk_pipe_submit_c2h_req(struct global_queue *queue, struct global_queue_req *req)
 {
+	SPDK_NOTICELOG("Sending out c2h global_req %p\n", req);
 	STAILQ_INSERT_TAIL(&queue->c2h_queue, req, link);
 	return 0;
 }
