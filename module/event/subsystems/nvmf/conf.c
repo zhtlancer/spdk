@@ -279,7 +279,7 @@ nvmf_parse_subsystem(struct spdk_conf_section *sp)
 {
 	const char *nqn, *mode;
 	size_t i;
-	int ret = -1;
+	int ret = 0;
 	int lcore;
 	bool allow_any_host;
 	bool allow_any_listener = true;
