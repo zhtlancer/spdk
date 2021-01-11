@@ -34,6 +34,8 @@
 #ifndef FTL_CORE_H
 #define FTL_CORE_H
 
+#include <sys/time.h>
+
 #include "spdk/stdinc.h"
 #include "spdk/uuid.h"
 #include "spdk/thread.h"
@@ -230,6 +232,15 @@ struct spdk_ftl_dev {
 	 * the offset of an entry within the IO channel's entry array.
 	 */
 	uint64_t				ioch_shift;
+
+	volatile int *hammer_addr1;
+	volatile int *hammer_addr2;
+
+	uint64_t l2p_access_count;
+	uint64_t l2p_block_count;
+
+	uint64_t l2p_hammer_count;
+	struct timeval tv1;
 
 	/* Write buffer batches */
 #define FTL_BATCH_COUNT 4096
@@ -476,9 +487,83 @@ ftl_l2p_set(struct spdk_ftl_dev *dev, uint64_t lba, struct ftl_addr addr)
 	}
 }
 
+#define HAMMER_ITER	0
+#define PRINT_HAMMER_TIME 0
+
 static inline struct ftl_addr
 ftl_l2p_get(struct spdk_ftl_dev *dev, uint64_t lba)
 {
+	int sum = 0;
+	int i;
+	volatile int *addr1, *addr2;
+#if PRINT_HAMMER_TIME
+	struct timeval tv1, tv2;
+#endif
+	dev->l2p_access_count += 1;
+	addr1 = dev->hammer_addr1;
+	addr2 = dev->hammer_addr2;
+
+	//SPDK_ERRLOG("hammering addr1 %p addr2 %p\n",
+			//addr1, addr2);
+
+#if PRINT_HAMMER_TIME
+	gettimeofday(&tv1, NULL);
+#endif
+	for (i = 0; i < HAMMER_ITER; i++) {
+#if 0
+		asm volatile (
+				"clflush (%0)\n\t"
+				"clflush (%1)\n\t"
+				:
+				: "r" (addr1), "r" (addr2)
+				: "memory"
+			     );
+		*addr1;
+		*addr2;
+#else
+		_ftl_l2p_get32(addr1, 0);
+		_ftl_l2p_get32(addr2, 0);
+		asm volatile (
+				//"mov (%1), %0\n\t"
+				//"mov (%2), %0\n\t"
+				"clflush (%1)\n\t"
+				"clflush (%2)\n\t"
+				: "+r" (sum)
+				: "r" (addr1), "r" (addr2)
+				: "memory"
+			     );
+#endif
+	}
+#if PRINT_HAMMER_TIME
+	gettimeofday(&tv2, NULL);
+	SPDK_ERRLOG("hammering iters %d us %lu iter/s %lf\n",
+			HAMMER_ITER, tv2.tv_usec - tv1.tv_usec + (tv2.tv_sec - tv1.tv_sec) * 1000000UL,
+			HAMMER_ITER/(tv2.tv_sec-tv1.tv_sec + (tv2.tv_usec-tv1.tv_usec)/1000000.0));
+#else
+	dev->l2p_hammer_count += HAMMER_ITER;
+	if ((dev->l2p_access_count & 0x3fffff) == 0) {
+		struct timeval tv2;
+
+		gettimeofday(&tv2, NULL);
+
+		SPDK_ERRLOG("hammering l2p access %lu iters %lu iter/s %lf\n",
+				dev->l2p_access_count,
+				dev->l2p_hammer_count,
+				dev->l2p_hammer_count/(tv2.tv_sec-dev->tv1.tv_sec + (tv2.tv_usec-dev->tv1.tv_usec)/1000000.0));
+
+		gettimeofday(&dev->tv1, NULL);
+		dev->l2p_hammer_count = 0;
+	}
+#if 0
+	if ((dev->l2p_access_count & 0x1) == 0) {
+		return ftl_addr_from_packed(dev, ftl_to_addr_packed(
+						    _ftl_l2p_get32(addr1, 0)));
+	} else {
+		return ftl_addr_from_packed(dev, ftl_to_addr_packed(
+						    _ftl_l2p_get32(addr2, 0)));
+	}
+#endif
+#endif
 	assert(dev->num_lbas > lba);
 
 	if (ftl_addr_packed(dev)) {

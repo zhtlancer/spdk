@@ -1175,6 +1175,8 @@ ftl_submit_read(struct ftl_io *io)
 
 	assert(LIST_EMPTY(&io->children));
 
+	dev->l2p_block_count += io->num_blocks;
+
 	while (io->pos < io->num_blocks) {
 		if (ftl_io_mode_physical(io)) {
 			num_blocks = rc = ftl_read_next_physical_addr(io, &addr);

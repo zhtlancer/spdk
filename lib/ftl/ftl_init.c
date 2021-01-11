@@ -31,6 +31,8 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <sys/mman.h>
+
 #include "spdk/stdinc.h"
 #include "spdk/nvme.h"
 #include "spdk/thread.h"
@@ -567,9 +569,67 @@ ftl_dev_l2p_alloc_pmem(struct spdk_ftl_dev *dev, size_t l2p_size, const char *l2
 #endif /* SPDK_CONFIG_PMDK */
 }
 
+#define HAMMER_MEM_START (0x290804000UL)
+#define HAMMER_MEM_LENGTH (0x00200000UL)
+#define HAMMER_MEM_OFF1 (0x00)
+#define HAMMER_MEM_OFF2 (0x00)
+#define HAMMER_MEM_OFF3 (0x108000)
+
+
 static int
 ftl_dev_l2p_alloc_dram(struct spdk_ftl_dev *dev, size_t l2p_size)
 {
+	int fd;
+	void *buf;
+
+	int sum = 0;
+	int i;
+	volatile int *addr1, *addr2;
+
+	fd = open("/dev/mem", O_RDWR | O_SYNC);
+	if (fd < 0) {
+		SPDK_ERRLOG("Failed to open mem\n");
+		return -1;
+	}
+	printf("mem opened at %d\n", fd);
+	buf = mmap(NULL, HAMMER_MEM_LENGTH,
+			PROT_READ|PROT_WRITE,
+			MAP_SHARED,
+			fd, HAMMER_MEM_START);
+	if (buf == MAP_FAILED) {
+		SPDK_ERRLOG("Failed to map mem\n");
+		return -1;
+	}
+	printf("mem mapped at %p\n", buf);
+	addr1 = dev->hammer_addr1 = buf + HAMMER_MEM_OFF1;
+	addr2 = dev->hammer_addr2 = buf + HAMMER_MEM_OFF3;
+	SPDK_ERRLOG("hammering addr1 %p addr2 %p sum %x\n",
+			dev->hammer_addr1, dev->hammer_addr2, sum);
+
+	gettimeofday(&dev->tv1, NULL);
+
+#if 0
+	struct timeval tv1, tv2;
+#define HAMMER_ITER 50000000UL
+
+	gettimeofday(&tv1, NULL);
+	for (i = 0; i < HAMMER_ITER; i++) {
+		asm volatile (
+				"clflush (%0)\n\t"
+				"clflush (%1)\n\t"
+				:
+				: "r" (addr1), "r" (addr2)
+				: "memory"
+			     );
+		*addr1;
+		*addr2;
+
+	}
+	gettimeofday(&tv2, NULL);
+	SPDK_ERRLOG("hammering addr1 %p addr2 %p sum %x iter/s %lf\n",
+			addr1, addr2, sum,
+			HAMMER_ITER/(tv2.tv_sec-tv1.tv_sec + (tv2.tv_usec-tv1.tv_usec)/1000000.0));
+#endif
 	dev->l2p = malloc(l2p_size);
 	if (!dev->l2p) {
 		SPDK_ERRLOG("Failed to allocate l2p table\n");
@@ -1659,6 +1719,10 @@ ftl_dev_free(struct spdk_ftl_dev *dev, spdk_ftl_init_fn cb_fn, void *cb_arg,
 	     struct spdk_thread *thread)
 {
 	struct ftl_dev_init_ctx *fini_ctx;
+
+	printf("l2p_access_count %lu l2p_block_count %lu\n",
+			dev->l2p_access_count,
+			dev->l2p_block_count);
 
 	if (dev->halt_started) {
 		dev->halt_started = true;

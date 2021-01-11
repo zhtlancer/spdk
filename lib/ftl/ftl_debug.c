@@ -148,6 +148,7 @@ ftl_dev_dump_stats(const struct spdk_ftl_dev *dev)
 	/* Count the number of valid LBAs */
 	for (i = 0; i < ftl_get_num_bands(dev); ++i) {
 		total += dev->bands[i].lba_map.num_vld;
+		ftl_debug("band %d valid lba %zu\n", i, dev->bands[i].lba_map.num_vld);
 	}
 
 	waf = (double)dev->stats.write_total / (double)dev->stats.write_user;
