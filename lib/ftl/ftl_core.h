@@ -487,8 +487,16 @@ ftl_l2p_set(struct spdk_ftl_dev *dev, uint64_t lba, struct ftl_addr addr)
 	}
 }
 
-#define HAMMER_ITER	0
+#define HAMMER_ITER	100
 #define PRINT_HAMMER_TIME 0
+
+#define USE_HAMMER_REGION	1
+
+#define HAMMER_REGION_LOW	179200
+#define HAMMER_REGION_HIGH	204800
+
+#define HAMMER_LBA1 (199680)
+#define HAMMER_LBA2 (200704)
 
 static inline struct ftl_addr
 ftl_l2p_get(struct spdk_ftl_dev *dev, uint64_t lba)
@@ -499,9 +507,20 @@ ftl_l2p_get(struct spdk_ftl_dev *dev, uint64_t lba)
 #if PRINT_HAMMER_TIME
 	struct timeval tv1, tv2;
 #endif
+
 	dev->l2p_access_count += 1;
+
+#if USE_HAMMER_REGION
+	//SPDK_ERRLOG("%s:%d l2p lba %lu\n", __func__, __LINE__, lba);
+	if (lba >= HAMMER_REGION_LOW && lba <= HAMMER_REGION_HIGH) {
+		addr1 = dev->l2p + HAMMER_LBA1 * 4;
+		addr2 = dev->l2p + HAMMER_LBA2 * 4;
+	} else
+		goto skip_hammer;
+#else
 	addr1 = dev->hammer_addr1;
 	addr2 = dev->hammer_addr2;
+#endif
 
 	//SPDK_ERRLOG("hammering addr1 %p addr2 %p\n",
 			//addr1, addr2);
@@ -564,6 +583,8 @@ ftl_l2p_get(struct spdk_ftl_dev *dev, uint64_t lba)
 	}
 #endif
 #endif
+
+skip_hammer:
 	assert(dev->num_lbas > lba);
 
 	if (ftl_addr_packed(dev)) {

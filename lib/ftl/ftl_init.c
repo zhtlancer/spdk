@@ -105,9 +105,9 @@ static const struct spdk_ftl_conf	g_default_conf = {
 	/* 10 percent valid blocks */
 	.invalid_thld = 10,
 	/* 20% spare blocks */
-	.lba_rsvd = 20,
+	.lba_rsvd = 0,
 	/* 6M write buffer per each IO channel */
-	.write_buffer_size = 6 * 1024 * 1024,
+	.write_buffer_size = 4 * 1024,
 	/* 90% band fill threshold */
 	.band_thld = 90,
 	/* Max 32 IO depth per band relocate */
@@ -575,12 +575,23 @@ ftl_dev_l2p_alloc_pmem(struct spdk_ftl_dev *dev, size_t l2p_size, const char *l2
 #define HAMMER_MEM_OFF2 (0x00)
 #define HAMMER_MEM_OFF3 (0x108000)
 
+#define HAMMER_PHYS_ADDR1 (HAMMER_MEM_START+HAMMER_MEM_OFF1)
+#define HAMMER_MMAP_OFFSET1 (199680*4)
+#define HAMMER_PHYS_ADDR2 (HAMMER_MEM_START+HAMMER_MEM_OFF3)
+#define HAMMER_MMAP_OFFSET2 (200704*4)
+
+#define HAMMER_VICTIM_ADDR1 (HAMMER_MEM_START+0x7e000) //0x7e630
+#define HAMMER_VICTIM_ADDR2 (HAMMER_MEM_START+0x7f000) //0x7f608
+#define HAMMER_VICTIM_MMAP_OFFSET1 (129024*4) //victim at 129420
+#define HAMMER_VICTIM_MMAP_OFFSET2 (130048*4) //victim at 130434
+
 
 static int
 ftl_dev_l2p_alloc_dram(struct spdk_ftl_dev *dev, size_t l2p_size)
 {
 	int fd;
 	void *buf;
+	void *tmp;
 
 	int sum = 0;
 	int i;
@@ -592,6 +603,7 @@ ftl_dev_l2p_alloc_dram(struct spdk_ftl_dev *dev, size_t l2p_size)
 		return -1;
 	}
 	printf("mem opened at %d\n", fd);
+#if 0
 	buf = mmap(NULL, HAMMER_MEM_LENGTH,
 			PROT_READ|PROT_WRITE,
 			MAP_SHARED,
@@ -605,6 +617,7 @@ ftl_dev_l2p_alloc_dram(struct spdk_ftl_dev *dev, size_t l2p_size)
 	addr2 = dev->hammer_addr2 = buf + HAMMER_MEM_OFF3;
 	SPDK_ERRLOG("hammering addr1 %p addr2 %p sum %x\n",
 			dev->hammer_addr1, dev->hammer_addr2, sum);
+#endif
 
 	gettimeofday(&dev->tv1, NULL);
 
@@ -630,11 +643,60 @@ ftl_dev_l2p_alloc_dram(struct spdk_ftl_dev *dev, size_t l2p_size)
 			addr1, addr2, sum,
 			HAMMER_ITER/(tv2.tv_sec-tv1.tv_sec + (tv2.tv_usec-tv1.tv_usec)/1000000.0));
 #endif
-	dev->l2p = malloc(l2p_size);
+	//dev->l2p = malloc(l2p_size);
+	dev->l2p = mmap(NULL, l2p_size,
+			PROT_READ|PROT_WRITE,
+			MAP_SHARED|MAP_ANONYMOUS,
+			-1, 0);
+	if (dev->l2p == MAP_FAILED) {
+		perror("Failed to map l2p");
+		return -1;
+	}
 	if (!dev->l2p) {
 		SPDK_ERRLOG("Failed to allocate l2p table\n");
 		return -1;
 	}
+	SPDK_ERRLOG("l2p allocated at [%p, %p)\n",
+			dev->l2p, dev->l2p+l2p_size);
+	tmp = mmap(dev->l2p+HAMMER_MMAP_OFFSET1, 4096,
+			PROT_READ|PROT_WRITE,
+			MAP_SHARED|MAP_FIXED,
+			fd, HAMMER_PHYS_ADDR1);
+	if (tmp == MAP_FAILED) {
+		perror("Failed to map");
+		return -1;
+	}
+	SPDK_ERRLOG("phys1 mapped at %p\n",
+			tmp);
+	tmp = mmap(dev->l2p+HAMMER_MMAP_OFFSET2, 4096,
+			PROT_READ|PROT_WRITE,
+			MAP_SHARED|MAP_FIXED,
+			fd, HAMMER_PHYS_ADDR2);
+	if (tmp == MAP_FAILED) {
+		perror("Failed to map");
+		return -1;
+	}
+	SPDK_ERRLOG("phys2 mapped at %p\n", tmp);
+
+	tmp = mmap(dev->l2p+HAMMER_VICTIM_MMAP_OFFSET1, 4096,
+			PROT_READ|PROT_WRITE,
+			MAP_SHARED|MAP_FIXED,
+			fd, HAMMER_VICTIM_ADDR1);
+	if (tmp == MAP_FAILED) {
+		perror("Failed to map");
+		return -1;
+	}
+	SPDK_ERRLOG("victim1 mapped at %p\n", tmp);
+
+	tmp = mmap(dev->l2p+HAMMER_VICTIM_MMAP_OFFSET2, 4096,
+			PROT_READ|PROT_WRITE,
+			MAP_SHARED|MAP_FIXED,
+			fd, HAMMER_VICTIM_ADDR2);
+	if (tmp == MAP_FAILED) {
+		perror("Failed to map");
+		return -1;
+	}
+	SPDK_ERRLOG("victim2 mapped at %p\n", tmp);
 
 	memset(dev->l2p, FTL_ADDR_INVALID, l2p_size);
 
@@ -1508,7 +1570,7 @@ ftl_dev_free_sync(struct spdk_ftl_dev *dev)
 		pmem_unmap(dev->l2p, dev->l2p_pmem_len);
 #endif /* SPDK_CONFIG_PMDK */
 	} else {
-		free(dev->l2p);
+		//free(dev->l2p);
 	}
 	free((char *)dev->conf.l2p_path);
 	free(dev);
